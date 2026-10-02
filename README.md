@@ -1,5 +1,5 @@
 # Pipeline CI/CD – Jenkins + SonarQube + Docker Hub
-
+Prueba weebhook
 Flujo: **Webhook → Get Source → (Build ‖ Sonar) → Docker Build → Publish Image**
 
 ## Estructura
