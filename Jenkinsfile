@@ -5,7 +5,7 @@
 
 ciPipeline(
   appDir      : 'app',
-  imageName   : 'TU_USUARIO_DOCKERHUB/demo-pipeline-app',
+  imageName   : 'toorstu/demo-pipeline-app',
   registry    : 'dockerhub',          // dockerhub | ecr | gar | acr
   credentialsId: 'dockerhub-creds',
   sonarServer : 'sonarqube'
