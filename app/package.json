@@ -1,0 +1,13 @@
+{
+  "name": "demo-pipeline-app",
+  "version": "1.0.0",
+  "description": "App de ejemplo para el pipeline CI/CD",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "build": "node -e \"require('./src/app')\" && echo BUILD OK",
+    "test": "jest --coverage --coverageReporters=lcov --coverageReporters=text"
+  },
+  "dependencies": { "express": "^4.19.2" },
+  "devDependencies": { "jest": "^29.7.0", "supertest": "^7.0.0" }
+}

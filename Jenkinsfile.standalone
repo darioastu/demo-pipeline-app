@@ -1,0 +1,82 @@
+// ============================================================
+// Pipeline declarativo SIN shared library (versión base)
+// ============================================================
+pipeline {
+  agent any
+
+  // 1) WEBHOOK: GitHub dispara el job con cada push
+  triggers { githubPush() }
+
+  environment {
+    IMAGE_NAME     = 'TU_USUARIO_DOCKERHUB/demo-pipeline-app'
+    IMAGE_TAG      = "${env.BUILD_NUMBER}"
+    REGISTRY_CREDS = 'dockerhub-creds'   // ID de credencial en Jenkins
+  }
+
+  tools { nodejs 'node20' }               // Configurado en Global Tool Configuration
+
+  options { timestamps(); buildDiscarder(logRotator(numToKeepStr: '10')) }
+
+  stages {
+    // 2) GET SOURCE
+    stage('Get Source') {
+      steps {
+        checkout scm
+        script { env.GIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim() }
+      }
+    }
+
+    // 3) BUILD y SONAR EN PARALELO
+    stage('Build & Sonar') {
+      parallel {
+        stage('Build') {
+          steps {
+            dir('app') {
+              sh 'npm install'
+              sh 'npm run build'
+              sh 'npm test'
+            }
+          }
+        }
+        stage('SonarQube') {
+          steps {
+            script {
+              def scannerHome = tool 'sonar-scanner'
+              withSonarQubeEnv('sonarqube') {
+                sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectVersion=${IMAGE_TAG}"
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 4) DOCKER BUILD
+    stage('Docker Build') {
+      steps {
+        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest ."
+      }
+    }
+
+    // 5) PUBLISH DOCKER IMAGE (Docker Hub)
+    stage('Publish Image') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: REGISTRY_CREDS,
+                         usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
+          sh '''
+            echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin
+            docker push ${IMAGE_NAME}:${IMAGE_TAG}
+            docker push ${IMAGE_NAME}:latest
+            docker logout
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always  { sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest || true" }
+    success { echo "Imagen publicada: ${IMAGE_NAME}:${IMAGE_TAG}" }
+    failure { echo 'El pipeline falló, revisar logs.' }
+  }
+}
