@@ -8,7 +8,7 @@ pipeline {
   triggers { githubPush() }
 
   environment {
-    IMAGE_NAME     = 'TU_USUARIO_DOCKERHUB/demo-pipeline-app'
+    IMAGE_NAME     = 'toorstu/demo-pipeline-app'
     IMAGE_TAG      = "${env.BUILD_NUMBER}"
     REGISTRY_CREDS = 'dockerhub-creds'   // ID de credencial en Jenkins
   }
