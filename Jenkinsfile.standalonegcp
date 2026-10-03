@@ -1,0 +1,129 @@
+// ============================================================
+// Pipeline declarativo SIN shared library
+// Webhook -> Get Source -> (Build || Sonar) -> Docker Build
+//         -> (Publish Docker Hub || Publish GCP Artifact Registry)
+// ============================================================
+pipeline {
+  agent any
+
+  // 1) WEBHOOK: GitHub dispara el job con cada push
+  triggers { githubPush() }
+
+  environment {
+    IMAGE_TAG   = "${env.BUILD_NUMBER}"
+
+    // Docker Hub
+    DH_IMAGE    = 'toorstu/demo-pipeline-app'
+    DH_CREDS    = 'dockerhub-creds'
+
+    // GCP Artifact Registry
+    GAR_HOST    = 'us-central1-docker.pkg.dev'
+    GAR_IMAGE   = 'us-central1-docker.pkg.dev/project-c422a3f4-c44e-4e6c-bdf/cloud-jenkins-registry/demo-pipeline-app'
+    GAR_CREDS   = 'gcp-sa-key'
+  }
+
+  tools { nodejs 'node20' }
+
+  options { timestamps(); buildDiscarder(logRotator(numToKeepStr: '10')) }
+
+  stages {
+    // 2) GET SOURCE
+    stage('Get Source') {
+      steps {
+        checkout scm
+        script {
+          env.GIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+          echo "Commit: ${env.GIT_SHORT}"
+        }
+      }
+    }
+
+    // 3) BUILD y SONAR EN PARALELO
+    stage('Build & Sonar') {
+      parallel {
+        stage('Build') {
+          steps {
+            dir('app') {
+              sh 'npm install'
+              sh 'npm run build'
+              sh 'npm test'
+            }
+          }
+        }
+        stage('SonarQube') {
+          steps {
+            script {
+              def scannerHome = tool 'sonar-scanner'
+              withSonarQubeEnv('sonarqube') {
+                sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectVersion=${IMAGE_TAG}"
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 4) DOCKER BUILD: una sola imagen con las etiquetas de ambos registries
+    stage('Docker Build') {
+      steps {
+        sh """
+          docker build \
+            --label git.commit=${env.GIT_SHORT} \
+            --label build.number=${IMAGE_TAG} \
+            -t ${DH_IMAGE}:${IMAGE_TAG}  -t ${DH_IMAGE}:latest \
+            -t ${GAR_IMAGE}:${IMAGE_TAG} -t ${GAR_IMAGE}:latest \
+            .
+        """
+      }
+    }
+
+    // 5) PUBLISH EN PARALELO (cada rama usa su propio DOCKER_CONFIG
+    //    para que los logins no se pisen entre sí)
+    stage('Publish Images') {
+      parallel {
+        stage('Docker Hub') {
+          environment { DOCKER_CONFIG = "${env.WORKSPACE}/.docker-hub" }
+          steps {
+            withCredentials([usernamePassword(credentialsId: DH_CREDS,
+                             usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
+              sh '''
+                echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin
+                docker push ${DH_IMAGE}:${IMAGE_TAG}
+                docker push ${DH_IMAGE}:latest
+                docker logout
+              '''
+            }
+          }
+        }
+        stage('GCP Artifact Registry') {
+          environment { DOCKER_CONFIG = "${env.WORKSPACE}/.docker-gar" }
+          steps {
+            withCredentials([file(credentialsId: GAR_CREDS, variable: 'GCP_KEY')]) {
+              sh '''
+                cat "$GCP_KEY" | docker login -u _json_key --password-stdin https://${GAR_HOST}
+                docker push ${GAR_IMAGE}:${IMAGE_TAG}
+                docker push ${GAR_IMAGE}:latest
+                docker logout https://${GAR_HOST}
+              '''
+            }
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      sh """
+        docker rmi ${DH_IMAGE}:${IMAGE_TAG} ${DH_IMAGE}:latest \
+                   ${GAR_IMAGE}:${IMAGE_TAG} ${GAR_IMAGE}:latest || true
+        rm -rf .docker-hub .docker-gar
+      """
+    }
+    success {
+      echo "✅ Docker Hub: ${DH_IMAGE}:${IMAGE_TAG}"
+      echo "✅ GCP Artifact Registry: ${GAR_IMAGE}:${IMAGE_TAG}"
+    }
+    failure { echo '❌ El pipeline falló, revisar logs.' }
+  }
+}
